@@ -1,0 +1,45 @@
+name: "✨ Запрос на улучшение"
+description: Предложить улучшение для amoCRM MCP server
+title: "[Фича]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Используй этот шаблон для понятного и ограниченного по объёму улучшения.
+  - type: input
+    id: problem
+    attributes:
+      label: Проблема
+      description: Что сейчас отсутствует или мешает работе
+      placeholder: Нет MCP-инструмента для чтения стадий воронки по pipeline ID
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+      description: Опиши, что именно нужно добавить или изменить
+      placeholder: Добавить read-only tool, который возвращает pipelines и stages с tenant-aware scope checks
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Ожидаемый эффект
+      description: Кто и как выиграет от этого изменения
+      placeholder: MCP-клиенты смогут читать настройки воронки без прямых raw API запросов
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Критерии готовности
+      description: Как понять, что задача выполнена
+      placeholder: |
+        - Инструмент задокументирован
+        - Проверки scope применяются корректно
+        - Есть тесты на успешный и ошибочный сценарии
+    validations:
+      required: false

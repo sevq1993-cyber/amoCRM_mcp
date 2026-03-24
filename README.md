@@ -1,55 +1,69 @@
 # amoCRM MCP Server
 
-Multi-tenant-ready MCP server for amoCRM with:
+[![CI](https://github.com/sevq1993-cyber/amoCRM_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/sevq1993-cyber/amoCRM_mcp/actions/workflows/ci.yml)
+![Node 22](https://img.shields.io/badge/node-22.x-43853d?logo=node.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)
+![Status](https://img.shields.io/badge/status-active-0d8a72)
 
-- `stdio` transport for local agents
-- `Streamable HTTP` transport for remote MCP clients
-- built-in local OIDC/OAuth shell for MCP auth
-- amoCRM OAuth install/refresh flow
-- webhook ingestion and normalized event store
-- local dashboard at `/dashboard`
+> 🚀 Готовый к мультиарендной работе MCP-сервер для amoCRM с `stdio`, Streamable HTTP, локальным OIDC/OAuth, обработкой webhook-событий, аудитом действий и поддержкой PostgreSQL/Redis.
 
-## Local Start
+Поддерживается **Gulian Digital LLC**.
 
-1. Copy `.env.example` into `.env` and fill in amoCRM credentials when ready.
-2. Install dependencies:
+## ✨ Что внутри
 
-```bash
-npm install
+- 🤖 `stdio` для локальных MCP-агентов и desktop-инструментов
+- 🌐 Streamable HTTP для удалённых MCP-клиентов
+- 🔐 Встроенный локальный OIDC/OAuth-контур для разработки и тестирования
+- 🔄 Подключение amoCRM через OAuth с обменом и обновлением токенов
+- 📩 Приём webhook-событий с нормализованным хранением
+- 🧾 Журнал аудита для операций записи
+- 🖥️ Локальная панель по адресу `/dashboard`
+- 🗃️ Хранение в памяти по умолчанию и опциональная связка PostgreSQL + Redis
+
+## 🧱 Структура проекта
+
+```text
+src/
+├── amocrm/         клиент amoCRM API
+├── auth/           HTTP bearer auth и локальный OIDC
+├── events/         парсинг webhook и сервис событий
+├── http/           Fastify-приложение и локальная панель
+├── mcp/            MCP-инструменты и ресурсы
+├── observability/  логирование
+├── persistence/    хранение в памяти и PostgreSQL адаптеры
+├── runtime/        bootstrap и сборка контекста приложения
+└── utils/          общие утилиты
 ```
 
-3. Start HTTP mode:
+## ⚡ Быстрый старт
+
+1. Скопируй `.env.example` в `.env`.
+2. Заполни amoCRM-параметры, когда будешь готов подключать реальный аккаунт.
+3. Установи зависимости и запусти HTTP-сервер.
 
 ```bash
+cp .env.example .env
+npm install
 npm run dev:http
 ```
 
-4. Open the dashboard:
+Открой локальную панель:
 
 ```text
 http://localhost:3000/dashboard
 ```
 
-## Useful Endpoints
+## 🔌 Основные эндпоинты
 
-- Dashboard: `http://localhost:3000/dashboard`
+- Панель: `http://localhost:3000/dashboard`
 - MCP HTTP: `http://localhost:3000/mcp`
 - Health: `http://localhost:3000/healthz`
 - Readiness: `http://localhost:3000/readyz`
 - OIDC discovery: `http://localhost:3000/.well-known/openid-configuration`
-- Protected resource metadata: `http://localhost:3000/.well-known/oauth-protected-resource/mcp`
-- amoCRM callback: `http://localhost:3000/oauth/amocrm/callback`
+- Метаданные OAuth protected resource: `http://localhost:3000/.well-known/oauth-protected-resource/mcp`
+- Callback amoCRM: `http://localhost:3000/oauth/amocrm/callback`
 
-## Local Defaults
-
-- Default tenant: `local-default`
-- Local admin account id for OIDC dev interactions: `local-admin`
-- Default confidential OAuth client:
-  - `client_id`: `local-dev-client`
-  - `client_secret`: `local-dev-secret`
-  - `redirect_uri`: `http://127.0.0.1:8787/callback`
-
-## Scripts
+## 🧪 Скрипты
 
 ```bash
 npm run dev:http
@@ -57,33 +71,54 @@ npm run dev:stdio
 npm run build
 npm run start:http
 npm run start:stdio
-npm run check
 npm run test
+npm run check
 ```
 
-## Current Storage Modes
+## ⚙️ Локальные значения по умолчанию
 
-- Default local mode: in-memory store + in-memory cache
-- Optional server mode: PostgreSQL + Redis through `POSTGRES_URL` and `REDIS_URL`
+- Тенант по умолчанию: `local-default`
+- Локальная админ-учётка: `local-admin`
+- `client_id` локального OAuth-клиента: `local-dev-client`
+- `client_secret` локального OAuth-клиента: `local-dev-secret`
+- Redirect URI по умолчанию: `http://127.0.0.1:8787/callback`
 
-## Important Local-Only Notes
+## 🗄️ Режимы хранения
 
-This build intentionally keeps the auth and persistence defaults easy for local development.
+- Локальный режим по умолчанию: хранение и кэш в памяти
+- Серверный режим: PostgreSQL + Redis через `POSTGRES_URL` и `REDIS_URL`
 
-- `oidc-provider` still uses development interactions and in-memory state by default.
-- Signing keys are development keys unless you replace them in the OIDC config.
-- For real deployment, replace the local OIDC defaults, externalize secrets, and use PostgreSQL + Redis.
+## 🐳 Docker
 
-## Docker
-
-Build app image:
+Собрать образ приложения:
 
 ```bash
 docker build -t amocrm-mcp .
 ```
 
-Optional local infra:
+Поднять локальную инфраструктуру:
 
 ```bash
 docker compose up -d postgres redis
 ```
+
+## 🔐 Важно по безопасности
+
+- Реальные amoCRM-секреты и production-токены нельзя хранить в Git.
+- В репозиторий должен попадать только `.env.example`, а не рабочий `.env`.
+- Перед production-развёртыванием нужно заменить dev-настройки OIDC.
+- Для реальной эксплуатации лучше использовать PostgreSQL и Redis вместо in-memory режима.
+
+## ✅ Что уже подготовлено для GitHub
+
+В репозитории уже есть:
+
+- GitHub Actions CI для `npm run check` и `npm run build`
+- `CODEOWNERS` для понятной ответственности и review-flow
+- шаблоны Issues для багов и новых возможностей
+- шаблон Pull Request, чтобы изменения были оформлены аккуратно
+- метаданные пакета с привязкой к GitHub-репозиторию
+
+## 🤝 Как вносить изменения
+
+Смотри [`CONTRIBUTING.md`](./CONTRIBUTING.md) для локального запуска, правил по веткам и оформления Pull Request.

@@ -3,7 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Multi-tenant-ready MCP server for amoCRM with HTTP and stdio transports.",
+  "description": "MCP-сервер для amoCRM с HTTP и stdio transport, OAuth/OIDC и webhook-обработкой.",
+  "author": "Gulian Digital LLC",
+  "license": "UNLICENSED",
+  "homepage": "https://github.com/sevq1993-cyber/amoCRM_mcp#readme",
+  "bugs": {
+    "url": "https://github.com/sevq1993-cyber/amoCRM_mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/sevq1993-cyber/amoCRM_mcp.git"
+  },
+  "keywords": [
+    "amocrm",
+    "mcp",
+    "model-context-protocol",
+    "typescript",
+    "fastify",
+    "oauth"
+  ],
   "engines": {
     "node": ">=22"
   },
