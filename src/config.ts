@@ -105,6 +105,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LOG_LEVEL: z.string().optional(),
   PORT: z.coerce.number().default(3000),
+  HTTP_BIND_HOST: z.string().default("127.0.0.1"),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   MCP_HTTP_PATH: z.string().default("/mcp"),
   DEFAULT_TENANT_ID: z.string().default("local-default"),
@@ -195,14 +196,45 @@ export interface AppConfig {
   seededClients: McpClientRegistration[];
 }
 
+const REDACTED = "[redacted]";
+const SENSITIVE_QUERY_KEYS = ["token", "code", "state", "access_token", "refresh_token", "client_secret"] as const;
+
+export const buildSignedWebhookUrl = (config: Pick<AppConfig, "baseUrl" | "env">) => {
+  const webhookUrl = new URL("/webhooks/amocrm", config.baseUrl);
+  webhookUrl.searchParams.set("token", config.env.WEBHOOK_SHARED_SECRET);
+  return webhookUrl;
+};
+
+export const redactSensitiveUrl = (value: string) => {
+  try {
+    const isAbsolute = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(value);
+    const url = new URL(value, "http://local.invalid");
+
+    for (const key of SENSITIVE_QUERY_KEYS) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.set(key, REDACTED);
+      }
+    }
+
+    if (isAbsolute) {
+      return url.toString();
+    }
+
+    const suffix = `${url.search}${url.hash}`;
+    return `${url.pathname}${suffix}`;
+  } catch {
+    return value.replace(
+      /([?&](?:token|code|state|access_token|refresh_token|client_secret)=)[^&]*/gi,
+      `$1${REDACTED}`,
+    );
+  }
+};
+
 export const loadConfig = (): AppConfig => {
   const env = envSchema.parse(process.env);
   const baseUrl = new URL(env.APP_BASE_URL);
   const mcpUrl = new URL(env.MCP_HTTP_PATH, baseUrl);
   const webhookUrl = new URL("/webhooks/amocrm", baseUrl);
-  if (env.WEBHOOK_SHARED_SECRET) {
-    webhookUrl.searchParams.set("token", env.WEBHOOK_SHARED_SECRET);
-  }
   const amoRedirectUri = env.AMO_REDIRECT_URI ?? new URL("/oauth/amocrm/callback", baseUrl).toString();
 
   const defaultClient = normalizeClient(

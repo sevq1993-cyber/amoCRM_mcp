@@ -4,7 +4,7 @@ import { createHttpApp } from "./http/app.js";
 const main = async () => {
   const context = await buildAppContext();
   const app = await createHttpApp(context);
-  const host = process.env.HTTP_BIND_HOST ?? "127.0.0.1";
+  const host = context.config.env.HTTP_BIND_HOST;
   let shuttingDown = false;
 
   const shutdown = async () => {

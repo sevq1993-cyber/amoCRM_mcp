@@ -71,7 +71,8 @@ http://localhost:3000/dashboard
 - OIDC discovery: `http://localhost:3000/.well-known/openid-configuration`
 - Метаданные OAuth protected resource: `http://localhost:3000/.well-known/oauth-protected-resource/mcp`
 - Callback amoCRM: `http://localhost:3000/oauth/amocrm/callback`
-- Webhook endpoint: `http://localhost:3000/webhooks/amocrm?token=<WEBHOOK_SHARED_SECRET>`
+- Webhook endpoint: `http://localhost:3000/webhooks/amocrm`
+  При регистрации webhook сервер сам добавляет `?token=<WEBHOOK_SHARED_SECRET>`, но этот токен не должен светиться в логах, UI или аудит-трейле.
 
 ## 🧪 Скрипты
 

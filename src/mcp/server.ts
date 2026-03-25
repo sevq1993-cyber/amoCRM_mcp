@@ -2,6 +2,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { buildSignedWebhookUrl, redactSensitiveUrl } from "../config.js";
 import type { AppContext } from "../runtime/app-context.js";
 import type { Scope, ToolExecutionContext } from "../types.js";
 import { AppError, ensure, toError } from "../utils/errors.js";
@@ -528,14 +529,15 @@ export const createMcpApplicationServer = (app: AppContext) => {
         requireConfirm(confirm, "confirm=true is required to mutate webhook settings");
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["admin.write"]);
-        const target = destinationUrl ?? app.config.webhookUrl.toString();
+        const target = destinationUrl ?? buildSignedWebhookUrl(app.config).toString();
+        const redactedTarget = redactSensitiveUrl(target);
         const response = await app.amo.syncWebhookSubscription(context.tenant.id, target);
         await app.audit.recordToolAction(context, {
           action: "admin.sync_webhooks",
-          target,
+          target: redactedTarget,
           destructive: true,
         });
-        return buildJsonResult(`Synced webhooks to ${target}`, response.data);
+        return buildJsonResult(`Synced webhooks to ${redactedTarget}`, response.data);
       } catch (error) {
         return handleToolError(error);
       }

@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { FastifyRequest } from "fastify";
 import { verifyBearerToken } from "../auth/http-auth.js";
+import { buildSignedWebhookUrl, redactSensitiveUrl } from "../config.js";
 import { parseAmoWebhookBody } from "../events/webhook-parser.js";
 import { createMcpApplicationServer } from "../mcp/server.js";
 import type { AppContext } from "../runtime/app-context.js";
@@ -22,6 +23,7 @@ type SessionEntry = {
   server: ReturnType<typeof createMcpApplicationServer>;
   expiresAt: number;
   lastTouchedAt: number;
+  closed: boolean;
 };
 
 type InstallSession = {
@@ -85,6 +87,8 @@ const normalizeHost = (value: string) => {
   }
 };
 
+const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
 const extractWebhookAccountInfo = (body: Record<string, unknown>) => {
   const account = body.account;
   const accountObject = account && typeof account === "object" && !Array.isArray(account) ? account : undefined;
@@ -142,11 +146,22 @@ const sanitizeClient = (client: McpClientRegistration) => ({
 });
 
 const renderDashboard = async (appContext: AppContext, authInfo?: FastifyRequest["authInfo"]) => {
-  const tenants = await appContext.store.listTenants();
-  const clients = await appContext.store.listClientRegistrations();
-  const events = await appContext.store.listEvents(appContext.config.env.DEFAULT_TENANT_ID, { limit: 10 });
-  const audit = await appContext.store.listAuditRecords(appContext.config.env.DEFAULT_TENANT_ID, 10);
-  const installation = await appContext.store.getInstallation(appContext.config.env.DEFAULT_TENANT_ID);
+  const requestedTenantIds = Array.isArray(authInfo?.extra?.tenantIds)
+    ? authInfo.extra.tenantIds.filter((value): value is string => typeof value === "string" && value.length > 0)
+    : [];
+  const visibleTenantIds = requestedTenantIds.length > 0 ? requestedTenantIds : [appContext.config.env.DEFAULT_TENANT_ID];
+  const primaryTenantId =
+    (typeof authInfo?.extra?.defaultTenantId === "string" && visibleTenantIds.includes(authInfo.extra.defaultTenantId))
+      ? authInfo.extra.defaultTenantId
+      : visibleTenantIds[0] ?? appContext.config.env.DEFAULT_TENANT_ID;
+
+  const tenants = (await appContext.store.listTenants()).filter((tenant) => visibleTenantIds.includes(tenant.id));
+  const clients = (await appContext.store.listClientRegistrations()).filter((client) =>
+    client.tenantIds.some((tenantId) => visibleTenantIds.includes(tenantId)),
+  );
+  const events = await appContext.store.listEvents(primaryTenantId, { limit: 10 });
+  const audit = await appContext.store.listAuditRecords(primaryTenantId, 10);
+  const installation = await appContext.store.getInstallation(primaryTenantId);
   const safeInstallation = installation ? sanitizeInstallation(installation) : undefined;
   const safeClients = clients.map((client) => sanitizeClient(client));
 
@@ -306,12 +321,18 @@ export const createHttpApp = async (appContext: AppContext) => {
   const bearer = verifyBearerToken(appContext.oidc, buildResourceMetadataUrl(appContext));
 
   const closeSessionEntry = async (entry?: SessionEntry) => {
-    if (!entry) {
+    if (!entry || entry.closed) {
       return;
     }
 
-    await entry.transport.close();
+    entry.closed = true;
+    await Promise.allSettled([entry.transport.close(), entry.server.close()]);
   };
+
+  const shouldRequireInstallStartAuth = () =>
+    appContext.config.env.NODE_ENV === "production" || !LOOPBACK_BIND_HOSTS.has(appContext.config.env.HTTP_BIND_HOST);
+
+  const buildWebhookDestination = () => buildSignedWebhookUrl(appContext.config).toString();
 
   const cleanupExpiredSessions = async () => {
     const now = Date.now();
@@ -352,7 +373,7 @@ export const createHttpApp = async (appContext: AppContext) => {
     amoInstallSessions.clear();
     const openSessions = [...sessions.values()];
     sessions.clear();
-    await Promise.allSettled(openSessions.map((entry) => entry.transport.close()));
+    await Promise.allSettled(openSessions.map((entry) => closeSessionEntry(entry)));
   });
 
   app.use((req, res, next) => {
@@ -370,7 +391,7 @@ export const createHttpApp = async (appContext: AppContext) => {
     appContext.logger.error(
       {
         err: error,
-        url: request.url,
+        url: redactSensitiveUrl(request.url),
         requestId: request.id,
       },
       "http request failed",
@@ -417,6 +438,16 @@ export const createHttpApp = async (appContext: AppContext) => {
   });
 
   app.get("/oauth/amocrm/start", async (request, reply) => {
+    if (shouldRequireInstallStartAuth()) {
+      await bearer(request, reply);
+      if (reply.sent) {
+        return reply;
+      }
+      requireRequestScope(request, "admin.write");
+      const requestedTenantId = ((request.query as { tenantId?: string } | undefined)?.tenantId) ?? appContext.config.env.DEFAULT_TENANT_ID;
+      requireTenantAccess(request, requestedTenantId);
+    }
+
     const query = request.query as { tenantId?: string };
     const tenantId = query.tenantId ?? appContext.config.env.DEFAULT_TENANT_ID;
     const tenant = await appContext.store.getTenant(tenantId);
@@ -572,10 +603,10 @@ export const createHttpApp = async (appContext: AppContext) => {
     requireTenantAccess(request, tenantId);
     const destinationUrl =
       ((request.body as { destinationUrl?: string } | undefined)?.destinationUrl) ??
-      appContext.config.webhookUrl.toString();
+      buildWebhookDestination();
     const result = await appContext.amo.syncWebhookSubscription(tenantId, destinationUrl);
     return {
-      destinationUrl,
+      destinationUrl: redactSensitiveUrl(destinationUrl),
       result: result.data,
     };
   });
@@ -608,14 +639,13 @@ export const createHttpApp = async (appContext: AppContext) => {
             transport,
             expiresAt: Date.now() + MCP_SESSION_TTL_MS,
             lastTouchedAt: Date.now(),
+            closed: false,
           });
         },
         onsessionclosed: async (closedSessionId) => {
           const closed = sessions.get(closedSessionId);
           sessions.delete(closedSessionId);
-          if (closed) {
-            await closed.server.close();
-          }
+          await closeSessionEntry(closed);
         },
       });
       await server.connect(transport);
@@ -624,6 +654,7 @@ export const createHttpApp = async (appContext: AppContext) => {
         transport,
         expiresAt: Date.now() + MCP_SESSION_TTL_MS,
         lastTouchedAt: Date.now(),
+        closed: false,
       };
     } else if (entry.expiresAt <= Date.now()) {
       sessions.delete(sessionId as string);
@@ -650,14 +681,13 @@ export const createHttpApp = async (appContext: AppContext) => {
             transport,
             expiresAt: Date.now() + MCP_SESSION_TTL_MS,
             lastTouchedAt: Date.now(),
+            closed: false,
           });
         },
         onsessionclosed: async (closedSessionId) => {
           const closed = sessions.get(closedSessionId);
           sessions.delete(closedSessionId);
-          if (closed) {
-            await closed.server.close();
-          }
+          await closeSessionEntry(closed);
         },
       });
       await server.connect(transport);
@@ -666,6 +696,7 @@ export const createHttpApp = async (appContext: AppContext) => {
         transport,
         expiresAt: Date.now() + MCP_SESSION_TTL_MS,
         lastTouchedAt: Date.now(),
+        closed: false,
       };
     }
 

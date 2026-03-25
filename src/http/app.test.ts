@@ -8,6 +8,7 @@ import type { EventService } from "../events/service.js";
 import { MemoryAppStore } from "../persistence/memory-store.js";
 import type { AppConfig } from "../config.js";
 import type { AppContext } from "../runtime/app-context.js";
+import { AppError } from "../utils/errors.js";
 import { nowIso } from "../utils/time.js";
 
 const logger = {
@@ -17,14 +18,17 @@ const logger = {
   debug: vi.fn(),
 };
 
-const createConfig = () =>
+const createConfig = (overrides?: Partial<AppConfig["env"]>) =>
   ({
     env: {
+      NODE_ENV: "development",
       DEFAULT_TENANT_ID: "tenant-a",
       POSTGRES_URL: undefined,
       REDIS_URL: undefined,
+      HTTP_BIND_HOST: "127.0.0.1",
       MCP_HTTP_PATH: "/mcp",
       WEBHOOK_SHARED_SECRET: "webhook-secret-123",
+      ...overrides,
     },
     issuerUrl: new URL("http://localhost:3456/"),
     baseUrl: new URL("http://localhost:3456/"),
@@ -91,6 +95,20 @@ const createStore = async () => {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   });
+  await store.saveClientRegistration({
+    clientId: "tenant-b-client",
+    clientName: "Tenant B Client",
+    clientSecret: "dev-secret-b",
+    redirectUris: ["http://127.0.0.1:8788/callback"],
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
+    scopes: ["crm.read"],
+    tenantIds: ["tenant-b"],
+    isPublic: false,
+    metadata: {},
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
   await store.saveTenantGrant({
     clientId: "local-dev-client",
     tenantId: "tenant-a",
@@ -124,7 +142,12 @@ const createOidcStub = (authInfo: AuthInfo) =>
   ({
     provider: {} as never,
     callback: vi.fn(async () => undefined),
-    verifyAccessToken: vi.fn(async () => authInfo),
+    verifyAccessToken: vi.fn(async (token: string) => {
+      if (token !== "admin-token") {
+        throw new AppError("Invalid access token", { statusCode: 401, code: "invalid_token" });
+      }
+      return authInfo;
+    }),
     getClient: vi.fn(),
     buildAuthorizationServerMetadata: vi.fn(() => ({
       issuer: "http://localhost:3456/",
@@ -186,7 +209,7 @@ const createAuditStub = () =>
     recordToolAction: vi.fn(),
   }) as unknown as AuditService;
 
-const createAppContext = async (): Promise<AppContext> => {
+const createAppContext = async (envOverrides?: Partial<AppConfig["env"]>): Promise<AppContext> => {
   const store = await createStore();
   const authInfo: AuthInfo = {
     token: "admin-token",
@@ -202,7 +225,7 @@ const createAppContext = async (): Promise<AppContext> => {
   };
 
   return {
-    config: createConfig(),
+    config: createConfig(envOverrides),
     logger,
     store,
     cache: {
@@ -253,6 +276,27 @@ describe("createHttpApp", () => {
     expect(authorized.body).not.toContain("access-secret");
     expect(authorized.body).not.toContain("refresh-secret");
     expect(authorized.body).toContain("tenant-a");
+    expect(authorized.body).not.toContain("tenant-b");
+    expect(authorized.body).not.toContain("Tenant B Client");
+
+    await app.close();
+  });
+
+  it("returns the bearer challenge for invalid bearer tokens too", async () => {
+    const app = await createHttpApp(await createAppContext());
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/dashboard",
+      headers: {
+        authorization: "Bearer invalid-token",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["www-authenticate"]).toBe(
+      'Bearer resource_metadata="http://localhost:3456/.well-known/oauth-protected-resource/mcp"',
+    );
 
     await app.close();
   });
@@ -314,6 +358,34 @@ describe("createHttpApp", () => {
     expect(JSON.parse(invalid.body)).toMatchObject({
       error: "invalid_state",
     });
+
+    await app.close();
+  });
+
+  it("requires admin auth for amoCRM install start when the bind host is not loopback", async () => {
+    const app = await createHttpApp(await createAppContext({
+      HTTP_BIND_HOST: "0.0.0.0",
+    }));
+
+    const unauthenticated = await app.inject({
+      method: "GET",
+      url: "/oauth/amocrm/start?tenantId=tenant-a",
+    });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(unauthenticated.headers["www-authenticate"]).toBe(
+      'Bearer resource_metadata="http://localhost:3456/.well-known/oauth-protected-resource/mcp"',
+    );
+
+    const authenticated = await app.inject({
+      method: "GET",
+      url: "/oauth/amocrm/start?tenantId=tenant-a",
+      headers: {
+        authorization: "Bearer admin-token",
+      },
+    });
+
+    expect(authenticated.statusCode).toBe(302);
 
     await app.close();
   });
@@ -387,6 +459,46 @@ describe("createHttpApp", () => {
     expect(JSON.parse(missingToken.body)).toMatchObject({
       error: "invalid_webhook_token",
     });
+
+    await app.close();
+  });
+
+  it("redacts webhook tokens from sync responses and error logs", async () => {
+    const context = await createAppContext();
+    context.amo.syncWebhookSubscription = vi.fn(async () => ({
+      status: 200,
+      data: { ok: true },
+      headers: new Headers(),
+    })) as unknown as AmoCrmClient["syncWebhookSubscription"];
+
+    const app = await createHttpApp(context);
+
+    const sync = await app.inject({
+      method: "POST",
+      url: "/admin/tenants/tenant-a/webhooks/sync",
+      headers: {
+        authorization: "Bearer admin-token",
+      },
+      payload: {},
+    });
+
+    expect(sync.statusCode).toBe(200);
+    expect(sync.body).toContain("/webhooks/amocrm?token=%5Bredacted%5D");
+    expect(sync.body).not.toContain("webhook-secret-123");
+
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/amocrm?token=webhook-secret-123",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      payload:
+        "account[id]=999&account[subdomain]=other&leads[add][0][id]=42&leads[add][0][updated_at]=1710000000",
+    });
+
+    const logCall = logger.error.mock.calls.at(-1);
+    expect(logCall?.[0]?.url).toContain("token=%5Bredacted%5D");
+    expect(logCall?.[0]?.url).not.toContain("webhook-secret-123");
 
     await app.close();
   });
