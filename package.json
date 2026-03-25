@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Внутренний MCP-сервер для amoCRM с HTTP и stdio transport, OAuth/OIDC и webhook-обработкой.",
+  "description": "Внутренний amoCRM MCP server с HTTP, stdio, OAuth/OIDC, webhook ingestion и tenant-aware access control.",
   "author": "Gulian Digital LLC",
   "license": "UNLICENSED",
   "homepage": "https://github.com/sevq1993-cyber/amoCRM_mcp#readme",

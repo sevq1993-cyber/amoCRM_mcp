@@ -5,11 +5,26 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)
 ![Status](https://img.shields.io/badge/status-internal%20development-0d8a72)
 
-> Внутренний MCP-сервер для amoCRM в активной разработке. Поддерживает `stdio`, Streamable HTTP, локальный OIDC/OAuth, обработку webhook-событий, аудит действий и PostgreSQL/Redis.
+> Внутренний MCP-сервер для amoCRM с `stdio`, Streamable HTTP, локальным OIDC/OAuth, webhook ingestion, аудитом и tenant-aware access model.
 
 Поддерживается **Gulian Digital LLC**.
 
-## ✨ Что внутри
+## Кратко
+
+- Статус: internal development
+- Основной сценарий: локальная разработка и проверка amoCRM integration до серверного развёртывания
+- Полная история изменений: [CHANGELOG.md](./CHANGELOG.md)
+- Текущий baseline: hardened local auth, guarded dashboard, tenant-scoped MCP и webhook token redaction
+
+## Последнее обновление
+
+- Закрыт публичный доступ к `/dashboard`, убраны секреты и лишний tenant inventory.
+- HTTP MCP переведён в fail-closed режим без bearer auth.
+- Добавлен server-side amoCRM install flow со `state`.
+- Webhook ingestion теперь проверяет token и installation/account binding.
+- README, CI и локальный runbook приведены к фактическому поведению.
+
+## Что внутри
 
 - 🤖 `stdio` для локальных MCP-агентов и desktop-инструментов
 - 🌐 Streamable HTTP для удалённых MCP-клиентов

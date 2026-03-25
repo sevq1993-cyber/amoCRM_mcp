@@ -1,0 +1,22 @@
+changelog:
+  categories:
+    - title: Security
+      labels:
+        - security
+        - auth
+    - title: MCP and API
+      labels:
+        - mcp
+        - api
+        - integration
+    - title: amoCRM
+      labels:
+        - amocrm
+        - webhooks
+        - oauth
+    - title: Docs and Ops
+      labels:
+        - docs
+        - ci
+        - docker
+        - ops
