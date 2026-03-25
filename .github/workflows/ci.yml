@@ -28,3 +28,66 @@ jobs:
 
       - name: Собрать проект
         run: npm run build
+
+      - name: Собрать Docker image
+        run: docker build -t amocrm-mcp-ci .
+
+      - name: Запустить HTTP smoke
+        env:
+          NODE_ENV: development
+          PORT: 3000
+          APP_BASE_URL: http://127.0.0.1:3000
+          MCP_HTTP_PATH: /mcp
+          DEFAULT_TENANT_ID: local-default
+          DEFAULT_TENANT_NAME: Local Default Tenant
+          LOCAL_ADMIN_ACCOUNT_ID: local-admin
+          LOCAL_ADMIN_EMAIL: local-admin@example.com
+          LOCAL_ADMIN_NAME: Local Admin
+          LOCAL_DEV_CLIENT_ID: local-dev-client
+          LOCAL_DEV_CLIENT_SECRET: local-dev-secret
+          LOCAL_DEV_REDIRECT_URI: http://127.0.0.1:8787/callback
+          OIDC_DEV_INTERACTIONS: "true"
+          ENABLE_ADMIN_WRITE_TOOLS: "true"
+          ENABLE_DELETE_TOOLS: "false"
+          ENABLE_WEBHOOK_MUTATIONS: "true"
+          AMO_INTEGRATION_ID: replace-me
+          AMO_CLIENT_SECRET: replace-me
+          AMO_BASE_DOMAIN: example.amocrm.ru
+          AMO_REDIRECT_URI: http://127.0.0.1:3000/oauth/amocrm/callback
+        run: |
+          set -euo pipefail
+
+          npm run start:http > /tmp/amocrm-mcp-http.log 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            kill "$server_pid" >/dev/null 2>&1 || true
+            wait "$server_pid" >/dev/null 2>&1 || true
+          }
+
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:3000/healthz | grep -q '"status":"ok"'
+          curl -fsS http://127.0.0.1:3000/readyz | grep -q '"status":"ready"'
+          curl -fsS http://127.0.0.1:3000/.well-known/openid-configuration | grep -q '"authorization_endpoint"'
+          curl -fsS http://127.0.0.1:3000/.well-known/oauth-authorization-server | grep -q '"token_endpoint"'
+          curl -fsS http://127.0.0.1:3000/.well-known/oauth-protected-resource/mcp | grep -q '"resource"'
+
+          callback_status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/oauth/amocrm/callback)
+          test "$callback_status" = "400"
+
+          webhook_status=$(curl -s -o /dev/null -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/webhooks/amocrm \
+            -H 'content-type: application/json' \
+            -d '{}')
+          case "$webhook_status" in
+            4*|5*) ;;
+            *) echo "Expected webhook rejection, got $webhook_status"; exit 1 ;;
+          esac

@@ -3,9 +3,9 @@
 [![CI](https://github.com/sevq1993-cyber/amoCRM_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/sevq1993-cyber/amoCRM_mcp/actions/workflows/ci.yml)
 ![Node 22](https://img.shields.io/badge/node-22.x-43853d?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)
-![Status](https://img.shields.io/badge/status-active-0d8a72)
+![Status](https://img.shields.io/badge/status-internal%20development-0d8a72)
 
-> 🚀 Готовый к мультиарендной работе MCP-сервер для amoCRM с `stdio`, Streamable HTTP, локальным OIDC/OAuth, обработкой webhook-событий, аудитом действий и поддержкой PostgreSQL/Redis.
+> Внутренний MCP-сервер для amoCRM в активной разработке. Поддерживает `stdio`, Streamable HTTP, локальный OIDC/OAuth, обработку webhook-событий, аудит действий и PostgreSQL/Redis.
 
 Поддерживается **Gulian Digital LLC**.
 
@@ -38,13 +38,22 @@ src/
 ## ⚡ Быстрый старт
 
 1. Скопируй `.env.example` в `.env`.
-2. Заполни amoCRM-параметры, когда будешь готов подключать реальный аккаунт.
+2. Заполни amoCRM-параметры и базовые локальные значения.
 3. Установи зависимости и запусти HTTP-сервер.
 
 ```bash
 cp .env.example .env
 npm install
 npm run dev:http
+```
+
+Приложение автоматически читает `.env` из корня репозитория.
+
+Для запуска уже собранной версии:
+
+```bash
+npm run build
+npm run start:http
 ```
 
 Открой локальную панель:
@@ -62,6 +71,7 @@ http://localhost:3000/dashboard
 - OIDC discovery: `http://localhost:3000/.well-known/openid-configuration`
 - Метаданные OAuth protected resource: `http://localhost:3000/.well-known/oauth-protected-resource/mcp`
 - Callback amoCRM: `http://localhost:3000/oauth/amocrm/callback`
+- Webhook endpoint: `http://localhost:3000/webhooks/amocrm?token=<WEBHOOK_SHARED_SECRET>`
 
 ## 🧪 Скрипты
 
@@ -96,20 +106,24 @@ npm run check
 docker build -t amocrm-mcp .
 ```
 
-Поднять локальную инфраструктуру:
+Поднять весь локальный стек, включая приложение:
 
 ```bash
-docker compose up -d postgres redis
+docker compose up --build
 ```
+
+Если нужен только инфраструктурный слой, можно поднять отдельно Postgres и Redis.
 
 ## 🔐 Важно по безопасности
 
+- Это внутренний репозиторий Gulian Digital LLC, а не публичный open-source проект.
 - Реальные amoCRM-секреты и production-токены нельзя хранить в Git.
 - В репозиторий должен попадать только `.env.example`, а не рабочий `.env`.
-- Перед production-развёртыванием нужно заменить dev-настройки OIDC.
+- Перед серверным развёртыванием нужен отдельный hardening pass для OIDC, webhook trust model и network exposure.
+- Для webhook ingestion используй отдельный `WEBHOOK_SHARED_SECRET`, а не значения по умолчанию.
 - Для реальной эксплуатации лучше использовать PostgreSQL и Redis вместо in-memory режима.
 
-## ✅ Что уже подготовлено для GitHub
+## ✅ Что уже подготовлено для внутреннего GitHub workflow
 
 В репозитории уже есть:
 
@@ -121,4 +135,4 @@ docker compose up -d postgres redis
 
 ## 🤝 Как вносить изменения
 
-Смотри [`CONTRIBUTING.md`](./CONTRIBUTING.md) для локального запуска, правил по веткам и оформления Pull Request.
+Смотри [`CONTRIBUTING.md`](./CONTRIBUTING.md) для локального запуска, внутреннего review-flow и оформления Pull Request.

@@ -15,6 +15,16 @@ type OidcClient = {
   token_endpoint_auth_method: "none" | "client_secret_post";
 };
 
+export interface McpAuthContext {
+  clientId: string;
+  subject?: string;
+  tenantIds: string[];
+  defaultTenantId?: string;
+  scopes: Scope[];
+  resource?: URL;
+  expiresAt: number;
+}
+
 export interface OidcFacade {
   provider: Provider;
   callback: ReturnType<Provider["callback"]>;
@@ -23,6 +33,86 @@ export interface OidcFacade {
   buildAuthorizationServerMetadata(): Record<string, unknown>;
   buildProtectedResourceMetadata(): Record<string, unknown>;
 }
+
+const supportedScopes: Scope[] = [
+  "crm.read",
+  "crm.write",
+  "admin.read",
+  "admin.write",
+  "events.read",
+  "tenant.manage",
+];
+
+const uniq = <T>(values: T[]) => [...new Set(values)];
+
+export const extractBearerToken = (authorizationHeader?: string): string | undefined => {
+  if (!authorizationHeader) {
+    return undefined;
+  }
+
+  const [scheme, token, ...rest] = authorizationHeader.trim().split(/\s+/);
+  if (scheme?.toLowerCase() !== "bearer" || !token || rest.length > 0) {
+    return undefined;
+  }
+
+  return token;
+};
+
+export const createBearerChallenge = (resourceMetadataUrl: string, scope?: string) => {
+  const parts = [`Bearer resource_metadata="${resourceMetadataUrl}"`];
+  if (scope) {
+    parts.push(`scope="${scope}"`);
+  }
+  return parts.join(", ");
+};
+
+export const createAuthorizationServerMetadata = (config: Pick<AppConfig, "issuerUrl" | "baseUrl">) => ({
+  issuer: config.issuerUrl.toString(),
+  authorization_endpoint: new URL("/auth", config.baseUrl).toString(),
+  token_endpoint: new URL("/token", config.baseUrl).toString(),
+  jwks_uri: new URL("/jwks", config.baseUrl).toString(),
+  response_types_supported: ["code"],
+  grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
+  token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+  code_challenge_methods_supported: ["S256"],
+  scopes_supported: supportedScopes,
+});
+
+export const createProtectedResourceMetadata = (config: Pick<AppConfig, "issuerUrl" | "mcpUrl">) => ({
+  resource: config.mcpUrl.toString(),
+  authorization_servers: [config.issuerUrl.toString()],
+  scopes_supported: supportedScopes,
+  resource_name: "amoCRM MCP Resource Server",
+});
+
+export const resolveMcpAuthContext = (
+  authInfo: AuthInfo,
+  client: McpClientRegistration,
+  resourceUrl: URL,
+): McpAuthContext => {
+  const tenantIds = uniq([
+    ...((authInfo.extra?.tenantIds as string[] | undefined) ?? []),
+    ...client.tenantIds,
+  ]).filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  const defaultTenantId =
+    (typeof authInfo.extra?.defaultTenantId === "string" && authInfo.extra.defaultTenantId) ||
+    client.tenantIds[0];
+
+  const scopes = (authInfo.scopes.length > 0 ? authInfo.scopes : client.scopes).filter(
+    (scope): scope is Scope => supportedScopes.includes(scope as Scope),
+  ) as Scope[];
+
+  return {
+    clientId: client.clientId,
+    subject: typeof authInfo.extra?.subject === "string" ? authInfo.extra.subject : undefined,
+    tenantIds,
+    defaultTenantId,
+    scopes,
+    resource: resourceUrl,
+    expiresAt: authInfo.expiresAt ?? 0,
+  };
+};
 
 const clientToProvider = (client: McpClientRegistration): OidcClient => ({
   client_id: client.clientId,
@@ -133,22 +223,64 @@ export const createOidcFacade = async (store: AppStore, config: AppConfig): Prom
 
       const client = await store.getClientRegistration(accessToken.clientId as string);
       ensure(client, `Unknown client: ${String(accessToken.clientId)}`, { statusCode: 401, code: "invalid_client" });
+      const audience = normalizeAudience(accessToken.aud);
+      ensure(
+        audience?.toString() === config.mcpUrl.toString(),
+        "Access token is not issued for this MCP resource",
+        { statusCode: 401, code: "invalid_token" },
+      );
+
+      const exp = typeof accessToken.exp === "number" ? accessToken.exp : 0;
+      ensure(exp > Math.floor(Date.now() / 1000), "Access token has expired", {
+        statusCode: 401,
+        code: "invalid_token",
+      });
+
       const grants = await store.listTenantGrants(client.clientId);
-      const tenantIds = grants.map((grant) => grant.tenantId);
+      const tenantIds = uniq([
+        ...grants.map((grant) => grant.tenantId),
+        ...client.tenantIds,
+      ]).filter((tenantId): tenantId is string => typeof tenantId === "string" && tenantId.length > 0);
+      if (tenantIds.length === 0) {
+        tenantIds.push(config.env.DEFAULT_TENANT_ID);
+      }
+
       const scopes = typeof accessToken.scope === "string" && accessToken.scope.length > 0
         ? (accessToken.scope.split(" ").filter(Boolean) as Scope[])
-        : (client.scopes as Scope[]);
+        : client.scopes;
+      ensure(
+        scopes.every((scope) => supportedScopes.includes(scope)),
+        "Access token contains unsupported scopes",
+        { statusCode: 401, code: "invalid_token" },
+      );
+
+      const authContext = resolveMcpAuthContext(
+        {
+          token,
+          clientId: client.clientId,
+          scopes,
+          expiresAt: exp,
+          resource: audience,
+          extra: {
+            tenantIds,
+            defaultTenantId: grants.find((grant) => grant.isDefault)?.tenantId ?? client.tenantIds[0],
+            subject: accessToken.accountId,
+          },
+        },
+        client,
+        config.mcpUrl,
+      );
 
       return {
         token,
-        clientId: client.clientId,
-        scopes,
-        expiresAt: accessToken.exp,
-        resource: normalizeAudience(accessToken.aud),
+        clientId: authContext.clientId,
+        scopes: authContext.scopes,
+        expiresAt: authContext.expiresAt,
+        resource: authContext.resource,
         extra: {
-          tenantIds,
-          defaultTenantId: grants.find((grant) => grant.isDefault)?.tenantId ?? tenantIds[0],
-          subject: accessToken.accountId,
+          tenantIds: authContext.tenantIds,
+          defaultTenantId: authContext.defaultTenantId,
+          subject: authContext.subject,
         },
       };
     },
@@ -156,25 +288,10 @@ export const createOidcFacade = async (store: AppStore, config: AppConfig): Prom
       return await store.getClientRegistration(clientId);
     },
     buildAuthorizationServerMetadata() {
-      return {
-        issuer: config.issuerUrl.toString(),
-        authorization_endpoint: new URL("/authorize", config.baseUrl).toString(),
-        token_endpoint: new URL("/token", config.baseUrl).toString(),
-        jwks_uri: new URL("/jwks", config.baseUrl).toString(),
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
-        token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
-        code_challenge_methods_supported: ["S256"],
-        scopes_supported: ["crm.read", "crm.write", "admin.read", "admin.write", "events.read", "tenant.manage"],
-      };
+      return createAuthorizationServerMetadata(config);
     },
     buildProtectedResourceMetadata() {
-      return {
-        resource: config.mcpUrl.toString(),
-        authorization_servers: [config.issuerUrl.toString()],
-        scopes_supported: ["crm.read", "crm.write", "admin.read", "admin.write", "events.read", "tenant.manage"],
-        resource_name: "amoCRM MCP Resource Server",
-      };
+      return createProtectedResourceMetadata(config);
     },
   };
 };

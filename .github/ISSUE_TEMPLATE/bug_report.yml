@@ -1,5 +1,5 @@
 name: "🐞 Сообщение об ошибке"
-description: Сообщить о воспроизводимой проблеме в amoCRM MCP server
+description: Сообщить о воспроизводимой проблеме во внутреннем amoCRM MCP server
 title: "[Баг]: "
 labels:
   - bug
@@ -8,6 +8,7 @@ body:
     attributes:
       value: |
         Спасибо. Опиши проблему максимально конкретно и так, чтобы её можно было воспроизвести.
+        Не вставляй реальные amoCRM токены, client secret или другие секреты.
   - type: input
     id: summary
     attributes:

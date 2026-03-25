@@ -95,7 +95,7 @@ export class MemoryAppStore implements AppStore {
       .filter((event) => event.tenantId === tenantId)
       .filter((event) => (options?.entityType ? event.entityType === options.entityType : true))
       .filter((event) => (options?.entityId ? event.entityId === options.entityId : true))
-      .sort((left, right) => right.receivedAt.localeCompare(left.receivedAt))
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
       .slice(0, limit);
   }
 

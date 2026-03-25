@@ -1,3 +1,4 @@
+import { AppError } from "../utils/errors.js";
 import type { AppStore, CacheAdapter, NormalizedAmoEvent } from "../types.js";
 
 export class EventService {
@@ -28,5 +29,30 @@ export class EventService {
 
   async get(tenantId: string, eventId: string) {
     return await this.store.getEvent(tenantId, eventId);
+  }
+
+  async replay(
+    tenantId: string,
+    eventId: string,
+    options?: { limit?: number },
+  ): Promise<{ event: NormalizedAmoEvent; related: NormalizedAmoEvent[] }> {
+    const event = await this.get(tenantId, eventId);
+    if (!event) {
+      throw new AppError(`Event ${eventId} not found`, {
+        statusCode: 404,
+        code: "event_not_found",
+      });
+    }
+
+    const related = await this.list(tenantId, {
+      limit: options?.limit ?? 10,
+      entityType: event.entityType,
+      entityId: event.entityId,
+    });
+
+    return {
+      event,
+      related,
+    };
   }
 }

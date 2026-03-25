@@ -16,7 +16,6 @@ export class MemoryCacheAdapter implements CacheAdapter {
 
     const earliest = values[0] ?? now;
     const waitMs = Math.max(windowMs - (now - earliest), 0);
-    values.push(now + waitMs);
     this.windows.set(key, values);
     return waitMs;
   }

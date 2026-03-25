@@ -3,8 +3,20 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { AppContext } from "../runtime/app-context.js";
-import type { Scope, Tenant, ToolExecutionContext } from "../types.js";
+import type { Scope, ToolExecutionContext } from "../types.js";
 import { AppError, ensure, toError } from "../utils/errors.js";
+import {
+  assertApiPath,
+  buildSettingsPath,
+  buildTenantResourceUris,
+  collectionEnum,
+  getRawRequestRequiredScopes,
+  mutableCollectionEnum,
+  parseTenantIds,
+  resolveTenantId,
+  settingsEnum,
+  SUPPORTED_SCOPES,
+} from "./contracts.js";
 
 type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
@@ -13,23 +25,39 @@ const maybeJsonRecord = jsonSchemaRecord.optional();
 
 const toPrettyJson = (value: unknown) => JSON.stringify(value, null, 2);
 
-const parseTenantIds = (extra: Extra): string[] | undefined => {
-  const tenantIds = extra.authInfo?.extra?.tenantIds;
-  return Array.isArray(tenantIds) ? tenantIds.filter((item): item is string => typeof item === "string") : undefined;
+const isHttpTransportRequest = (extra: Extra) => Boolean(extra.requestInfo);
+
+const resolveVisibleTenantIds = (app: AppContext, extra: Extra) => {
+  if (isHttpTransportRequest(extra) && !extra.authInfo) {
+    return [] as string[];
+  }
+
+  const tenantIds = parseTenantIds(extra);
+  if (tenantIds && tenantIds.length > 0) {
+    return tenantIds;
+  }
+
+  const defaultTenantId =
+    (typeof extra.authInfo?.extra?.defaultTenantId === "string" && extra.authInfo.extra.defaultTenantId) ||
+    app.config.env.DEFAULT_TENANT_ID;
+
+  return [defaultTenantId];
 };
 
-const getDefaultTenantId = (extra: Extra): string | undefined => {
-  const tenantId = extra.authInfo?.extra?.defaultTenantId;
-  return typeof tenantId === "string" ? tenantId : undefined;
-};
-
-const resolveContext = async (
+export const resolveContext = async (
   app: AppContext,
   extra: Extra,
   tenantId?: string,
 ): Promise<ToolExecutionContext> => {
+  if (isHttpTransportRequest(extra) && !extra.authInfo) {
+    throw new AppError("Missing bearer token for HTTP MCP request", {
+      statusCode: 401,
+      code: "invalid_token",
+    });
+  }
+
   const allowedTenantIds = parseTenantIds(extra);
-  const resolvedTenantId = tenantId ?? getDefaultTenantId(extra) ?? app.config.env.DEFAULT_TENANT_ID;
+  const resolvedTenantId = resolveTenantId(app, extra, tenantId);
 
   if (allowedTenantIds && allowedTenantIds.length > 0 && !allowedTenantIds.includes(resolvedTenantId)) {
     throw new AppError(`Client is not allowed to access tenant ${resolvedTenantId}`, {
@@ -40,15 +68,14 @@ const resolveContext = async (
 
   const tenant = await app.store.getTenant(resolvedTenantId);
   ensure(tenant, `Unknown tenant ${resolvedTenantId}`, { statusCode: 404, code: "tenant_not_found" });
+  ensure(tenant.active, `Tenant ${resolvedTenantId} is inactive`, {
+    statusCode: 403,
+    code: "tenant_inactive",
+  });
 
   const installation = await app.store.getInstallation(resolvedTenantId);
   const scopes = (extra.authInfo?.scopes ?? [
-    "crm.read",
-    "crm.write",
-    "admin.read",
-    "admin.write",
-    "events.read",
-    "tenant.manage",
+    ...SUPPORTED_SCOPES,
   ]) as Scope[];
   const actor =
     (typeof extra.authInfo?.extra?.subject === "string" && extra.authInfo.extra.subject) ||
@@ -85,41 +112,6 @@ const requireConfirm = (confirm: boolean | undefined, message: string) => {
   }
 };
 
-const collectionEnum = z.enum(["leads", "contacts", "companies", "tasks", "users", "tags"]);
-const mutableCollectionEnum = z.enum(["leads", "contacts", "companies", "tasks"]);
-const settingsEnum = z.enum(["account", "pipelines", "stages", "custom_fields", "webhooks", "users"]);
-
-const buildSettingsPath = (input: {
-  settingType: z.infer<typeof settingsEnum>;
-  entityType?: string;
-  pipelineId?: string;
-  resourceId?: string;
-}) => {
-  switch (input.settingType) {
-    case "account":
-      return "/api/v4/account";
-    case "users":
-      return "/api/v4/users";
-    case "pipelines":
-      return input.resourceId ? `/api/v4/leads/pipelines/${input.resourceId}` : "/api/v4/leads/pipelines";
-    case "stages":
-      ensure(input.pipelineId, "pipelineId is required for stages", { statusCode: 400, code: "validation_error" });
-      return input.resourceId
-        ? `/api/v4/leads/pipelines/${input.pipelineId}/statuses/${input.resourceId}`
-        : `/api/v4/leads/pipelines/${input.pipelineId}/statuses`;
-    case "custom_fields":
-      ensure(input.entityType, "entityType is required for custom_fields", {
-        statusCode: 400,
-        code: "validation_error",
-      });
-      return input.resourceId
-        ? `/api/v4/${input.entityType}/custom_fields/${input.resourceId}`
-        : `/api/v4/${input.entityType}/custom_fields`;
-    case "webhooks":
-      return input.resourceId ? `/api/v4/webhooks/${input.resourceId}` : "/api/v4/webhooks";
-  }
-};
-
 const handleToolError = (error: unknown) => {
   const safe = toError(error);
   return {
@@ -142,21 +134,6 @@ const buildJsonResult = (label: string, payload: unknown) => ({
   ],
 });
 
-const listResourceUris = async (app: AppContext, extra: Extra) => {
-  const tenantIds = parseTenantIds(extra) ?? [app.config.env.DEFAULT_TENANT_ID];
-  const uris: Array<{ uri: string; name: string }> = [];
-
-  for (const tenantId of tenantIds) {
-    uris.push({ uri: `amocrm://tenant/${tenantId}/account`, name: "account" });
-    uris.push({ uri: `amocrm://tenant/${tenantId}/users`, name: "users" });
-    uris.push({ uri: `amocrm://tenant/${tenantId}/pipelines`, name: "pipelines" });
-    uris.push({ uri: `amocrm://tenant/${tenantId}/custom-fields/leads`, name: "custom-fields-leads" });
-    uris.push({ uri: `amocrm://tenant/${tenantId}/events/recent`, name: "recent-events" });
-  }
-
-  return uris;
-};
-
 const readTenantResource = async (app: AppContext, extra: Extra, tenantId: string, resourceType: string, entityType?: string) => {
   const context = await resolveContext(app, extra, tenantId);
 
@@ -166,7 +143,7 @@ const readTenantResource = async (app: AppContext, extra: Extra, tenantId: strin
       return await app.amo.getAccount(context.tenant.id);
     case "users":
       requireScopes(context, ["crm.read"]);
-      return await app.amo.getEntity(context.tenant.id, "users");
+      return await app.amo.listCollection(context.tenant.id, "users");
     case "pipelines":
       requireScopes(context, ["admin.read"]);
       return await app.amo.rawRequest(context.tenant.id, "GET", "/api/v4/leads/pipelines");
@@ -218,7 +195,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
       try {
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["crm.read"]);
-        const response = await app.amo.getEntity(context.tenant.id, entityType, undefined, query);
+        const response = await app.amo.listCollection(context.tenant.id, entityType, query);
         return buildJsonResult(`Fetched ${entityType}`, response.data);
       } catch (error) {
         return handleToolError(error);
@@ -246,7 +223,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
       try {
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["crm.read"]);
-        const response = await app.amo.getEntity(context.tenant.id, entityType, entityId, query);
+        const response = await app.amo.getCollectionItem(context.tenant.id, entityType, entityId, query);
         return buildJsonResult(`Fetched ${entityType}/${entityId}`, response.data);
       } catch (error) {
         return handleToolError(error);
@@ -276,7 +253,10 @@ export const createMcpApplicationServer = (app: AppContext) => {
       try {
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["crm.write"]);
-        const response = await app.amo.upsertCollection(context.tenant.id, entityType, items, mode === "create" ? "POST" : "PATCH");
+        const response =
+          mode === "create"
+            ? await app.amo.createCollectionItems(context.tenant.id, entityType, items)
+            : await app.amo.updateCollectionItems(context.tenant.id, entityType, items);
         await app.audit.recordToolAction(context, {
           action: `crm.${mode}.${entityType}`,
           target: `${entityType}:${items.length}`,
@@ -309,7 +289,13 @@ export const createMcpApplicationServer = (app: AppContext) => {
       try {
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["crm.write"]);
-        const response = await app.amo.completeTask(context.tenant.id, taskId, text);
+        const response = await app.amo.updateCollectionItems(context.tenant.id, "tasks", [
+          {
+            id: Number(taskId),
+            is_completed: true,
+            text,
+          },
+        ]);
         await app.audit.recordToolAction(context, {
           action: "crm.complete_task",
           target: `tasks:${taskId}`,
@@ -447,7 +433,12 @@ export const createMcpApplicationServer = (app: AppContext) => {
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["admin.read"]);
         const path = buildSettingsPath({ settingType, entityType, pipelineId, resourceId });
-        const response = await app.amo.rawRequest(context.tenant.id, "GET", path, undefined, query);
+        const response =
+          settingType === "users"
+            ? await app.amo.listCollection(context.tenant.id, "users", query)
+            : settingType === "account"
+              ? await app.amo.getAccount(context.tenant.id)
+              : await app.amo.rawRequest(context.tenant.id, "GET", path, undefined, query);
         return buildJsonResult(`Fetched ${settingType}`, response.data);
       } catch (error) {
         return handleToolError(error);
@@ -537,7 +528,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
         requireConfirm(confirm, "confirm=true is required to mutate webhook settings");
         const context = await resolveContext(app, extra, tenantId);
         requireScopes(context, ["admin.write"]);
-        const target = destinationUrl ?? new URL("/webhooks/amocrm", app.config.baseUrl).toString();
+        const target = destinationUrl ?? app.config.webhookUrl.toString();
         const response = await app.amo.syncWebhookSubscription(context.tenant.id, target);
         await app.audit.recordToolAction(context, {
           action: "admin.sync_webhooks",
@@ -573,11 +564,11 @@ export const createMcpApplicationServer = (app: AppContext) => {
     async ({ tenantId, method, path, query, body, confirm }, extra) => {
       try {
         const context = await resolveContext(app, extra, tenantId);
-        requireScopes(context, method === "GET" ? ["crm.read"] : ["admin.write"]);
+        requireScopes(context, getRawRequestRequiredScopes(method, path));
         if (method !== "GET") {
           requireConfirm(confirm, "confirm=true is required for non-GET raw requests");
         }
-        const response = await app.amo.rawRequest(context.tenant.id, method, path, body, query);
+        const response = await app.amo.rawRequest(context.tenant.id, method, assertApiPath(path), body, query);
         await app.audit.recordToolAction(context, {
           action: `raw.${method.toLowerCase()}`,
           target: path,
@@ -681,7 +672,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
     "amocrm-account",
     new ResourceTemplate("amocrm://tenant/{tenantId}/account", {
       list: async (extra) => ({
-        resources: (await listResourceUris(app, extra))
+        resources: buildTenantResourceUris(resolveVisibleTenantIds(app, extra))
           .filter((resource) => resource.name === "account")
           .map((resource) => ({
             uri: resource.uri,
@@ -709,7 +700,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
     "amocrm-users",
     new ResourceTemplate("amocrm://tenant/{tenantId}/users", {
       list: async (extra) => ({
-        resources: (await listResourceUris(app, extra))
+        resources: buildTenantResourceUris(resolveVisibleTenantIds(app, extra))
           .filter((resource) => resource.name === "users")
           .map((resource) => ({
             uri: resource.uri,
@@ -737,7 +728,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
     "amocrm-pipelines",
     new ResourceTemplate("amocrm://tenant/{tenantId}/pipelines", {
       list: async (extra) => ({
-        resources: (await listResourceUris(app, extra))
+        resources: buildTenantResourceUris(resolveVisibleTenantIds(app, extra))
           .filter((resource) => resource.name === "pipelines")
           .map((resource) => ({
             uri: resource.uri,
@@ -765,8 +756,8 @@ export const createMcpApplicationServer = (app: AppContext) => {
     "amocrm-custom-fields",
     new ResourceTemplate("amocrm://tenant/{tenantId}/custom-fields/{entityType}", {
       list: async (extra) => ({
-        resources: (await listResourceUris(app, extra))
-          .filter((resource) => resource.name === "custom-fields-leads")
+        resources: buildTenantResourceUris(resolveVisibleTenantIds(app, extra))
+          .filter((resource) => resource.name.startsWith("custom-fields-"))
           .map((resource) => ({
             uri: resource.uri,
             name: resource.name,
@@ -795,7 +786,7 @@ export const createMcpApplicationServer = (app: AppContext) => {
     "amocrm-recent-events",
     new ResourceTemplate("amocrm://tenant/{tenantId}/events/recent", {
       list: async (extra) => ({
-        resources: (await listResourceUris(app, extra))
+        resources: buildTenantResourceUris(resolveVisibleTenantIds(app, extra))
           .filter((resource) => resource.name === "recent-events")
           .map((resource) => ({
             uri: resource.uri,

@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { createBearerChallenge, extractBearerToken } from "./oidc.js";
 import type { OidcFacade } from "./oidc.js";
 
 declare module "fastify" {
@@ -8,25 +9,14 @@ declare module "fastify" {
   }
 }
 
-export const verifyBearerToken = (oidc: OidcFacade) => {
+export const verifyBearerToken = (oidc: OidcFacade, resourceMetadataUrl: string) => {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const authorization = request.headers.authorization;
-    if (!authorization) {
-      reply.header(
-        "www-authenticate",
-        `Bearer resource_metadata="${new URL(".well-known/oauth-protected-resource/mcp", new URL(request.url, "http://localhost")).pathname}"`,
-      );
-      throw reply.code(401).send({
+    const token = extractBearerToken(request.headers.authorization);
+    if (!token) {
+      reply.header("www-authenticate", createBearerChallenge(resourceMetadataUrl));
+      return reply.code(401).send({
         error: "invalid_token",
-        error_description: "Missing Authorization header",
-      });
-    }
-
-    const [scheme, token] = authorization.split(" ");
-    if (scheme?.toLowerCase() !== "bearer" || !token) {
-      throw reply.code(401).send({
-        error: "invalid_token",
-        error_description: "Expected Bearer token",
+        error_description: "Missing or invalid Authorization header",
       });
     }
 

@@ -1,4 +1,23 @@
 services:
+  app:
+    build:
+      context: .
+      target: runtime
+    command: ["node", "dist/src/index-http.js"]
+    depends_on:
+      - postgres
+      - redis
+    env_file:
+      - .env
+    environment:
+      APP_BASE_URL: http://localhost:3000
+      NODE_ENV: development
+      PORT: 3000
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/amocrm_mcp
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+
   postgres:
     image: postgres:16
     environment:
