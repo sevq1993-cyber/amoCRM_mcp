@@ -16,6 +16,19 @@
 - Полная история изменений: [CHANGELOG.md](./CHANGELOG.md)
 - Текущий baseline: hardened local auth, guarded dashboard, tenant-scoped MCP и webhook token redaction
 
+## Обновления
+
+В этом репозитории изменения фиксируются не только в git commit’ах, но и в читаемом виде.
+
+- `Added` — новые функции, инструменты, маршруты и возможности
+- `Changed` — переработка существующего поведения и контрактов
+- `Fixed` — исправления багов и регрессий
+- `Security` — изменения в auth, access control, webhook trust model и защите секретов
+- `Docs` — обновления README, CI, Docker, runbook и внутреннего workflow
+
+Главная точка для истории изменений: [CHANGELOG.md](./CHANGELOG.md).
+Если в проекте меняется поведение, конфиг, безопасность или внешний контракт, это должно отражаться и там, и при необходимости в этом README.
+
 ## Последнее обновление
 
 - Закрыт публичный доступ к `/dashboard`, убраны секреты и лишний tenant inventory.
@@ -23,6 +36,8 @@
 - Добавлен server-side amoCRM install flow со `state`.
 - Webhook ingestion теперь проверяет token и installation/account binding.
 - README, CI и локальный runbook приведены к фактическому поведению.
+
+Для полного списка изменений по шагам смотри [CHANGELOG.md](./CHANGELOG.md).
 
 ## Что внутри
 
